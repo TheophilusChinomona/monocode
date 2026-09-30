@@ -27,10 +27,14 @@ import {
   useState,
   type CSSProperties,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { flushSync } from "react-dom";
 import { AttachmentChip } from "./AttachmentChip";
+import { GeneratedImage } from "./GeneratedImage";
 import { MonocodeSparkles } from "./MonocodeSparkles";
+import { OrchestratorConstellation } from "./OrchestratorConstellation";
+import { PlanStepsBurst } from "./PlanStepsBurst";
 import { FilePreview } from "../../files/ui/FilePreview";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { ToolDiffPreview } from "./ToolDiffPreview";
@@ -39,8 +43,7 @@ import { OrchestrationPreview } from "../../orchestration/ui/OrchestrationPrevie
 import { TaskListPreview } from "./TaskListPreview";
 import { HandoffButton, SecondOpinionButton } from "./SecondOpinionButton";
 import { SecondOpinionCard } from "./SecondOpinionCard";
-import { NoteMiniCard } from "../../notes/ui";
-import { BtwPopover, type BtwOpenRequest } from "./BtwPopover";
+import { NoteMiniCard } from "../../notes/ui/NoteMiniCard";
 
 import { TerminalSpinner } from "./TerminalSpinner";
 import { Popover } from "../../../shared/ui/Popover";
@@ -62,7 +65,6 @@ import { visibleUserPrompt } from "../../orchestration/model/orchestration";
 import { playCue } from "../../settings/model/sounds";
 import { legacyTaskListFromText } from "../model/taskList";
 import { resolveModel } from "../model/models";
-import { btwOpenTargetTurnId, btwSurfaceHarness } from "../model/btw";
 import { harnessForTurn } from "../model/secondOpinion";
 import { Shimmer } from "../../../shared/ui/Shimmer";
 import {
@@ -97,6 +99,7 @@ import {
   groupTurnItems,
   groupTurns,
   initialThinkingIndex,
+  isFailedStatus,
   isIncompleteTool,
   isSubagentBlock,
   isThinkingBlock,
@@ -133,6 +136,7 @@ import {
 import {
   clearTranscriptHighlights,
   paintTranscriptHighlights,
+  transcriptMutationNeedsRepaint,
   transcriptWordRanges,
 } from "../model/transcriptHighlights";
 
@@ -177,26 +181,9 @@ type Props = {
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
   onBuildPlan?: (blockId: string, target?: PlanBuildTarget) => void;
+  planBuildTargets?: boolean;
   onSecondOpinion?: (target: ModelTarget, turn: Block[]) => void;
   onHandoff?: (target: ModelTarget, turn: Block[]) => void;
-  onBtwSubmit?: (
-    threadId: string,
-    messageId: string,
-    text: string,
-    turn: Block[],
-    model?: string,
-    modelSettings?: Record<string, string>,
-  ) => void;
-  onBtwRetry?: (threadId: string, turn: Block[]) => void;
-  onBtwDelete?: (threadId: string, turn: Block[]) => void;
-  onBtwModelChange?: (
-    threadId: string,
-    model: string,
-    modelSettings: Record<string, string>,
-    turn: Block[],
-  ) => void;
-  btwOpenRequest?: BtwOpenRequest | null;
-  onBtwOpenRequestHandled?: (requestId: number) => void;
   onEditLastTurn?: () => void;
   editingLastTurn?: boolean;
   onJumpToBottomChange?: (show: boolean) => void;
@@ -237,14 +224,9 @@ function AgentTranscriptComponent({
   onOpenDiff,
   onOpenPlan,
   onBuildPlan,
+  planBuildTargets = true,
   onSecondOpinion,
   onHandoff,
-  onBtwSubmit,
-  onBtwRetry,
-  onBtwDelete,
-  onBtwModelChange,
-  btwOpenRequest,
-  onBtwOpenRequestHandled,
   onEditLastTurn,
   editingLastTurn = false,
   onJumpToBottomChange,
@@ -342,10 +324,14 @@ function AgentTranscriptComponent({
 
   const syncPinned = useCallback(
     (el: HTMLElement) => {
-      const near = isNearBottom(el);
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      // Scrolling up inside the bottom margin is the reader leaving. Pinning
+      // again here would snap each streamed chunk back down under the wheel.
+      const leaving =
+        !stickToBottom.current && distance > distanceFromBottom.current;
+      const near = isNearBottom(el) && !leaving;
       stickToBottom.current = near;
-      distanceFromBottom.current =
-        el.scrollHeight - el.scrollTop - el.clientHeight;
+      distanceFromBottom.current = distance;
       setShowJump(!near);
     },
     [setShowJump],
@@ -484,15 +470,9 @@ function AgentTranscriptComponent({
     return () => observer.disconnect();
   }, [scrollerEl, setShowJump, visible]);
 
+  useTurnScrollAnchor(scrollerEl, visible, stickToBottom);
+
   const turns = groupTurns(blocks, managed);
-  const btwOpenTurnId =
-    btwOpenRequest && harness
-      ? btwOpenTargetTurnId(turns, blocks, harness, managed)
-      : undefined;
-  useEffect(() => {
-    if (!btwOpenRequest || btwOpenTurnId) return;
-    onBtwOpenRequestHandled?.(btwOpenRequest.id);
-  }, [btwOpenRequest, btwOpenTurnId, onBtwOpenRequestHandled]);
   const firstVisibleTurn = Math.max(0, turns.length - visibleTurnCount);
   const visibleTurns = turns.slice(firstVisibleTurn);
   const turnsRef = useRef(turns);
@@ -638,13 +618,20 @@ function AgentTranscriptComponent({
       return;
     }
     let frame = 0;
+    let pending: MutationRecord[] = [];
     const paint = () => {
-      frame = 0;
       const { matches, current } = transcriptWordRanges(el, searchQuery);
       paintTranscriptHighlights(owner, matches, current);
     };
-    const observer = new MutationObserver(() => {
-      if (!frame) frame = requestAnimationFrame(paint);
+    const observer = new MutationObserver((records) => {
+      for (const record of records) pending.push(record);
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const changed = pending;
+        pending = [];
+        if (transcriptMutationNeedsRepaint(changed, searchQuery)) paint();
+      });
     });
     observer.observe(el, {
       childList: true,
@@ -710,10 +697,6 @@ function AgentTranscriptComponent({
           const turnHarness = harness
             ? (turnModel?.harness ?? harnessForTurn(blocks, turn, harness))
             : undefined;
-          const btwHarness =
-            harness != null
-              ? btwSurfaceHarness(blocks, turn, harness, userBlock?.btwThreads)
-              : undefined;
           // Work the turn has already answered for folds away behind one line,
           // leaving the prompt and the answer to it.
           const turnId = turn[0].id;
@@ -818,7 +801,7 @@ function AgentTranscriptComponent({
                 onOpenPlan={onOpenPlan}
                 onBuildPlan={onBuildPlan}
                 planBusy={!!busy}
-                planHarness={harness}
+                planHarness={planBuildTargets ? harness : undefined}
                 planModel={model}
                 planModelSettings={modelSettings}
                 cwd={cwd}
@@ -973,7 +956,6 @@ function AgentTranscriptComponent({
                     startedAt != null ? startedAt + durationMs : undefined
                   }
                   copyText={turnCopyText(turn)}
-                  cwd={cwd}
                   onSaveNote={onSaveNote}
                   harness={turnHarness}
                   fromHarness={turnHarness}
@@ -986,57 +968,6 @@ function AgentTranscriptComponent({
                   onHandoff={
                     onHandoff ? (target) => onHandoff(target, turn) : undefined
                   }
-                  model={turnModel?.id ?? model}
-                  modelSettings={modelSettings}
-                  btwThreads={userBlock?.btwThreads}
-                  visible={visible}
-                  btwHarness={btwHarness}
-                  onBtwSubmit={
-                    btwHarness && onBtwSubmit
-                      ? (
-                          threadId,
-                          messageId,
-                          text,
-                          nextModel,
-                          nextModelSettings,
-                        ) =>
-                          onBtwSubmit(
-                            threadId,
-                            messageId,
-                            text,
-                            turn,
-                            nextModel,
-                            nextModelSettings,
-                          )
-                      : undefined
-                  }
-                  onBtwRetry={
-                    btwHarness && onBtwRetry
-                      ? (threadId) => onBtwRetry(threadId, turn)
-                      : undefined
-                  }
-                  onBtwDelete={
-                    btwHarness && onBtwDelete
-                      ? (threadId) => onBtwDelete(threadId, turn)
-                      : undefined
-                  }
-                  onBtwModelChange={
-                    btwHarness && onBtwModelChange
-                      ? (threadId, nextModel, nextModelSettings) =>
-                          onBtwModelChange(
-                            threadId,
-                            nextModel,
-                            nextModelSettings,
-                            turn,
-                          )
-                      : undefined
-                  }
-                  btwOpenRequest={
-                    btwOpenTurnId === turnId ? btwOpenRequest : undefined
-                  }
-                  onBtwOpenRequestHandled={onBtwOpenRequestHandled}
-                  onOpenFile={onOpenFile}
-                  onOpenDiff={onOpenDiff}
                 />
               ) : null}
             </div>
@@ -1054,117 +985,6 @@ function AgentTranscriptComponent({
     </div>
   );
 }
-
-export type TurnResponseViewProps = {
-  blocks: Block[];
-  live?: boolean;
-  cwd?: string;
-  userMessageId: string;
-  onOpenFile?: (path: string) => void;
-  onOpenDiff?: (path: string) => void;
-};
-
-/** Compact harness activity view reused by BTW side conversations. */
-function TurnResponseViewComponent({
-  blocks,
-  live = false,
-  cwd,
-  userMessageId,
-  onOpenFile,
-  onOpenDiff,
-}: TurnResponseViewProps) {
-  const transcriptLayout = useTranscriptLayout();
-  const turn = useMemo(
-    () => [{ id: userMessageId, role: "user" as const, text: "" }, ...blocks],
-    [blocks, userMessageId],
-  );
-  const settled = !live;
-  const items = useMemo(
-    () =>
-      groupTurnItems(
-        turn.filter((block) => !block.orchestration),
-        { settled },
-      ),
-    [turn, settled],
-  );
-  const initialThinkingAt = initialThinkingIndex(items);
-  const foldedAt = lastActivityIndex(items);
-  const workStillRunning = activityStillRunning(turn);
-  const answering =
-    foldedAt >= 0 &&
-    items
-      .slice(foldedAt + 1)
-      .some((item) => item.type === "block" && isProseBlock(item.block));
-
-  if (blocks.length === 0 && live) {
-    return <InitialThinking live embedded />;
-  }
-  if (blocks.length === 0) return null;
-
-  return (
-    <div className="btw-turn-response min-w-0 font-mono text-[13px] leading-5">
-      {items.map((item, itemIndex) => {
-        if (item.type === "subagents") {
-          return (
-            <SubagentStack
-              key={item.blocks[0].id}
-              blocks={item.blocks}
-              cwd={cwd}
-              live={live}
-              embedded
-              onOpenFile={onOpenFile}
-              onOpenDiff={onOpenDiff}
-            />
-          );
-        }
-        if (item.type === "activity") {
-          if (itemIndex === initialThinkingAt) {
-            return (
-              <InitialThinking
-                key={`thinking-${item.blocks[0].id}`}
-                live={live}
-                embedded
-              />
-            );
-          }
-          return (
-            <ActivityPhases
-              key={item.blocks[0].id}
-              blocks={item.blocks}
-              cwd={cwd}
-              done={
-                !live ||
-                itemIndex < foldedAt ||
-                (answering && !workStillRunning)
-              }
-              padded={false}
-              onOpenFile={onOpenFile}
-              onOpenDiff={onOpenDiff}
-            />
-          );
-        }
-        if (item.type === "block") {
-          if (item.block.role === "user") return null;
-          return (
-            <TranscriptBlock
-              key={item.block.id}
-              block={item.block}
-              layout={transcriptLayout}
-              stickyIndex={0}
-              embedded
-              cwd={cwd}
-              onOpenFile={onOpenFile}
-              onOpenDiff={onOpenDiff}
-            />
-          );
-        }
-        return null;
-      })}
-    </div>
-  );
-}
-
-export const TurnResponseView = memo(TurnResponseViewComponent);
 
 // Keep hidden panes' local state, and catch up with current props on activation.
 export const AgentTranscript = memo(
@@ -1246,8 +1066,6 @@ function TurnDuration({
   metrics,
   labelHidden = false,
   modelName,
-  model,
-  modelSettings,
   harness,
   completedAt,
   copyText: output,
@@ -1256,26 +1074,12 @@ function TurnDuration({
   fromModel,
   onSecondOpinion,
   onHandoff,
-  btwHarness,
-  btwThreads,
-  visible,
-  cwd,
-  onBtwSubmit,
-  onBtwRetry,
-  onBtwDelete,
-  onBtwModelChange,
-  btwOpenRequest,
-  onBtwOpenRequestHandled,
-  onOpenFile,
-  onOpenDiff,
 }: {
   elapsedMs: number | null;
   metrics?: TurnMetrics;
   /** True when the fold line above already keeps the time for this turn. */
   labelHidden?: boolean;
   modelName?: string;
-  model?: string;
-  modelSettings?: Record<string, string>;
   harness?: HarnessId;
   completedAt?: number;
   copyText?: string;
@@ -1285,78 +1089,20 @@ function TurnDuration({
   fromModel?: string;
   onSecondOpinion?: (target: ModelTarget) => void;
   onHandoff?: (target: ModelTarget) => void;
-  btwHarness?: HarnessId;
-  btwThreads?: Block["btwThreads"];
-  visible?: boolean;
-  cwd?: string;
-  onBtwSubmit?: (
-    threadId: string,
-    messageId: string,
-    text: string,
-    model?: string,
-    modelSettings?: Record<string, string>,
-  ) => void;
-  onBtwRetry?: (threadId: string) => void;
-  onBtwDelete?: (threadId: string) => void;
-  onBtwModelChange?: (
-    threadId: string,
-    model: string,
-    modelSettings: Record<string, string>,
-  ) => void;
-  btwOpenRequest?: BtwOpenRequest | null;
-  onBtwOpenRequestHandled?: (requestId: number) => void;
-  onOpenFile?: (path: string) => void;
-  onOpenDiff?: (path: string) => void;
 }) {
   const label = formatWorkingDuration(elapsedMs, modelName, true);
-  const hasBtw = !!(btwHarness && onBtwSubmit && onBtwRetry);
   const dot = (
     <span
       aria-hidden
       className="size-[3px] shrink-0 rounded-full bg-content/25"
     />
   );
-  const metricsBadge = (
-    <TurnMetricsBadge metrics={metrics} elapsedMs={elapsedMs} />
-  );
-  const labelDetails = labelHidden ? null : (
-    <span
-      className={`flex min-w-0 items-center gap-2.5 ${hasBtw ? "ml-1.5" : ""}`}
-    >
-      {dot}
-      <span className="flex min-w-0 items-center gap-1.5">
-        {harness ? (
-          <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
-        ) : null}
-        <span className="min-w-0 truncate" title={label}>
-          {label}
-        </span>
-      </span>
-    </span>
-  );
-  const timeDetails =
-    completedAt != null ? (
-      <span
-        className={`${hasBtw ? "ml-1.5" : "ml-auto"} flex shrink-0 items-center gap-2.5`}
-      >
-        {dot}
-        <span className="shrink-0 text-content/35">
-          {formatClockTime(completedAt)}
-        </span>
-      </span>
-    ) : null;
   return (
     <div
       aria-label={label}
       className="flex w-full min-w-0 max-w-full items-center gap-2.5 overflow-hidden px-4 pt-1 pb-3 font-sans text-sm text-content/40"
     >
-      <span
-        className={
-          hasBtw
-            ? "flex w-full min-w-0 items-center gap-1"
-            : "flex shrink-0 items-center gap-1"
-        }
-      >
+      <span className="flex shrink-0 items-center gap-1">
         {output ? (
           <>
             <CopyTurnButton text={output} />
@@ -1379,33 +1125,29 @@ function TurnDuration({
             excludeFromModel
           />
         ) : null}
-        {btwHarness && onBtwSubmit && onBtwRetry ? (
-          <BtwPopover
-            harness={btwHarness}
-            cwd={cwd}
-            model={model}
-            modelSettings={modelSettings}
-            threads={btwThreads}
-            visible={visible}
-            onSubmit={onBtwSubmit}
-            onRetry={onBtwRetry}
-            onDelete={onBtwDelete}
-            onModelChange={onBtwModelChange}
-            openRequest={btwOpenRequest}
-            onOpenRequestHandled={onBtwOpenRequestHandled}
-            onOpenFile={onOpenFile}
-            onOpenDiff={onOpenDiff}
-          >
-            {metricsBadge}
-            {labelDetails}
-            {timeDetails}
-          </BtwPopover>
-        ) : (
-          metricsBadge
-        )}
+        <TurnMetricsBadge metrics={metrics} elapsedMs={elapsedMs} />
       </span>
-      {hasBtw ? null : labelDetails}
-      {hasBtw ? null : timeDetails}
+      {labelHidden ? null : (
+        <span className="flex min-w-0 items-center gap-2.5">
+          {dot}
+          <span className="flex min-w-0 items-center gap-1.5">
+            {harness ? (
+              <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
+            ) : null}
+            <span className="min-w-0 truncate" title={label}>
+              {label}
+            </span>
+          </span>
+        </span>
+      )}
+      {completedAt != null ? (
+        <span className="flex shrink-0 items-center gap-2.5">
+          {dot}
+          <span className="shrink-0 text-content/35">
+            {formatClockTime(completedAt)}
+          </span>
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -1728,6 +1470,10 @@ const TranscriptBlock = memo(function TranscriptBlock({
     );
   }
 
+  if (block.role === "image") {
+    return block.image ? <GeneratedImage image={block.image} /> : null;
+  }
+
   if (block.role === "tool") {
     return (
       <ToolCall
@@ -2048,6 +1794,13 @@ function UserMessageBlock({
           ) : null}
           {monocode ? (
             <MonocodeSparkles blockId={block.id} startedAt={block.startedAt} />
+          ) : block.intent === "plan" ? (
+            <PlanStepsBurst blockId={block.id} startedAt={block.startedAt} />
+          ) : block.intent === "orchestrate" ? (
+            <OrchestratorConstellation
+              blockId={block.id}
+              startedAt={block.startedAt}
+            />
           ) : null}
         </div>
         {text ||
@@ -2308,6 +2061,67 @@ function sameActivity(a: ActivityPhasesProps, b: ActivityPhasesProps): boolean {
 }
 
 /**
+ * Hold the reader's place while turns above the viewport change height. An
+ * off-screen turn keeps its content-visibility placeholder until it is first
+ * laid out, and the scroller opts out of native scroll anchoring, so scrolling
+ * up through a freshly opened chat would otherwise shove the view down by
+ * each turn's correction.
+ */
+function useTurnScrollAnchor(
+  el: HTMLDivElement | null,
+  enabled: boolean,
+  stickToBottom: RefObject<boolean>,
+) {
+  useLayoutEffect(() => {
+    const inner = el?.firstElementChild;
+    if (!enabled || !el || !inner) return;
+    const heights = new WeakMap<Element, number>();
+    const resize = new ResizeObserver((entries) => {
+      // A parked transcript's scroller is detached and measures zero.
+      if (!el.isConnected) return;
+      const viewportTop = el.getBoundingClientRect().top;
+      let shift = 0;
+      for (const entry of entries) {
+        const height =
+          entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+        const previous = heights.get(entry.target);
+        heights.set(entry.target, height);
+        if (previous === undefined || stickToBottom.current) continue;
+        // Only turns that sat wholly above the view. A turn the reader is
+        // looking at grows downward from where they are reading.
+        const top = entry.target.getBoundingClientRect().top;
+        if (top + previous <= viewportTop) shift += height - previous;
+      }
+      if (shift) el.scrollTop += shift;
+    });
+    let observed = new WeakSet<Element>();
+    const observeTurns = () => {
+      for (const turn of inner.children) {
+        if (observed.has(turn) || !turn.classList.contains("transcript-turn"))
+          continue;
+        observed.add(turn);
+        resize.observe(turn);
+      }
+    };
+    const mutations = new MutationObserver((records) => {
+      // Removal is rare (a rewind or edit), so start over rather than hold
+      // detached turns. Re-observed turns report the height already stored.
+      if (records.some((record) => record.removedNodes.length > 0)) {
+        resize.disconnect();
+        observed = new WeakSet();
+      }
+      observeTurns();
+    });
+    mutations.observe(inner, { childList: true });
+    observeTurns();
+    return () => {
+      mutations.disconnect();
+      resize.disconnect();
+    };
+  }, [el, enabled, stickToBottom]);
+}
+
+/**
  * Keep a live phase body on its newest step. Pinning happens in layout
  * before paint so the window follows without a visible hitch; only a real
  * wheel away from the bottom pauses that.
@@ -2339,8 +2153,14 @@ function useLivePhaseScroll(
     const pin = () => {
       if (stickToBottom.current) el.scrollTop = el.scrollHeight;
     };
+    let lastDistance = 0;
     const onScroll = () => {
-      if (isNearBottom(el)) stickToBottom.current = true;
+      // Only a scroll toward the end re-pins; one leaving it must not.
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (isNearBottom(el) && distance <= lastDistance) {
+        stickToBottom.current = true;
+      }
+      lastDistance = distance;
     };
     const onWheel = (e: WheelEvent) => {
       if (!nestedScrollAbsorbsWheel(el, e.deltaY)) return;
@@ -2894,6 +2714,7 @@ function agentStepBlock(step: AgentStep): Block {
       title: step.text,
       ...(step.toolKind ? { kind: step.toolKind } : {}),
       ...(step.status ? { status: step.status } : {}),
+      ...(step.detail ? { detail: step.detail } : {}),
       ...(step.preview ? { preview: step.preview } : {}),
     },
   };
@@ -2909,7 +2730,14 @@ function subagentStatusLine(block: Block, steps: AgentStep[]): string {
   if (toolCallState(block) === "rejected") return "failed";
   const tools = steps.filter((step) => step.kind === "tool").length;
   if (tools === 0) return "";
-  return tools === 1 ? "1 step" : `${tools} steps`;
+  const count = tools === 1 ? "1 step" : `${tools} steps`;
+  // A step that failed inside a run that went on to finish still has to say so
+  // here, or the row reads clean until someone opens the trail.
+  const failed = steps.filter(
+    (step) => step.kind === "tool" && isFailedStatus(step.status),
+  ).length;
+  if (!failed) return count;
+  return `${count}, ${failed === 1 ? "1 failed" : `${failed} failed`}`;
 }
 
 /** Whether the line that titled a group has more in it than the header shows. */
