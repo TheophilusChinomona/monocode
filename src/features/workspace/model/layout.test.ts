@@ -38,6 +38,7 @@ import {
   placePane,
   splitPane,
   splitSizesAtBoundary,
+  setTabFocus,
   swapLeaves,
   swapWithLargestLeaf,
   updateTerminalTab,
@@ -461,6 +462,48 @@ describe("openTerminalTab", () => {
     ]);
     expect(extra.path).toBe("repo 2");
     expect(layoutLeaves(next.layout)).toHaveLength(3);
+  });
+});
+
+describe("setTabFocus", () => {
+  it("leaves maximizedId untouched when the tab isn't maximized", () => {
+    const tab = { ...newTab("a"), layout: splitPane(leaf("a"), "a", "right", "b") };
+    const next = setTabFocus(tab, "b");
+    expect(next.focusedId).toBe("b");
+    expect(next.maximizedId).toBeUndefined();
+  });
+
+  it("keeps the maximize when focus lands back on the maximized pane", () => {
+    const tab = {
+      ...newTab("a"),
+      layout: splitPane(leaf("a"), "a", "right", "b"),
+      maximizedId: "b",
+    };
+    const next = setTabFocus(tab, "b");
+    expect(next.focusedId).toBe("b");
+    expect(next.maximizedId).toBe("b");
+  });
+
+  it("drops the maximize when focus moves to a different pane (directional nav, sidebar selection)", () => {
+    const tab = {
+      ...newTab("a"),
+      layout: splitPane(leaf("a"), "a", "right", "b"),
+      maximizedId: "b",
+    };
+    const next = setTabFocus(tab, "a");
+    expect(next.focusedId).toBe("a");
+    expect(next.maximizedId).toBeUndefined();
+  });
+
+  it("reveals a newly split pane instead of leaving it hidden behind the old maximize", () => {
+    const tab = { ...newTab("a"), layout: leaf("a"), maximizedId: "a" };
+    const split = { ...tab, layout: splitPane(tab.layout, "a", "right", "b") };
+    const next = setTabFocus(split, "b");
+    expect(next.maximizedId).toBeUndefined();
+    expect(layoutLeaves(next.layout).map((pane) => pane.id)).toEqual([
+      "a",
+      "b",
+    ]);
   });
 });
 

@@ -174,6 +174,7 @@ import {
   resetTabToSession,
   replaceLeafId,
   setSplitRatio,
+  setTabFocus,
   siblingLeafId,
   splitPane,
   surfacePanes,
@@ -2124,7 +2125,7 @@ export default function App({
       setTabs((prev) =>
         prev.map((entry) =>
           entry.id === id
-            ? { ...entry, focusedId: nextFocusedId, diffFocused: false }
+            ? { ...setTabFocus(entry, nextFocusedId), diffFocused: false }
             : entry,
         ),
       );
@@ -2453,11 +2454,10 @@ export default function App({
       setTabs((prev) =>
         prev.map((t) => {
           if (t.id !== activeTab.id) return t;
-          return {
-            ...t,
-            layout: splitPane(t.layout, t.focusedId, dir, session.id),
-            focusedId: session.id,
-          };
+          return setTabFocus(
+            { ...t, layout: splitPane(t.layout, t.focusedId, dir, session.id) },
+            session.id,
+          );
         }),
       );
       setComposerFocused(true);
@@ -3478,7 +3478,7 @@ export default function App({
       setTabs((prev) =>
         prev.map((t) =>
           t.id === activeTabId
-            ? { ...t, focusedId: paneId, diffFocused: false }
+            ? { ...setTabFocus(t, paneId), diffFocused: false }
             : t,
         ),
       );
@@ -3711,7 +3711,7 @@ export default function App({
     setActiveTabId(tab.id);
     setTabs((prev) =>
       prev.map((entry) =>
-        entry.id === tab.id ? { ...entry, focusedId: sessionId } : entry,
+        entry.id === tab.id ? setTabFocus(entry, sessionId) : entry,
       ),
     );
     setComposerFocused(true);

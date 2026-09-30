@@ -963,6 +963,20 @@ export function removePane(
 }
 
 /**
+ * Move a tab's focus to `focusedId`. Drops an active maximize when focus
+ * lands on a different pane, so the newly focused pane isn't hidden behind
+ * the stale maximized one.
+ */
+export function setTabFocus(tab: WorkspaceTab, focusedId: string): WorkspaceTab {
+  if (!tab.maximizedId || tab.maximizedId === focusedId) {
+    return { ...tab, focusedId };
+  }
+  const next = { ...tab, focusedId };
+  delete next.maximizedId;
+  return next;
+}
+
+/**
  * Close one pane in a tab. Remaining chats, files, and terminals stay;
  * returns null only when this was the last leaf.
  */
