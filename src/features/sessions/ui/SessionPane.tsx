@@ -95,6 +95,21 @@ import {
 } from "../../settings/model/appearance";
 import type { SessionFolderTarget } from "../model/sessionFolders";
 import { markLinkedSessionUpdateSeen } from "../../inbox/model/linkedSessionSeen";
+import { ExplorerMenu, type ExplorerMenuItem } from "../../files/ui/ExplorerMenu";
+
+function paneContextMenuItems(maximized: boolean): ExplorerMenuItem[] {
+  const items: ExplorerMenuItem[] = [
+    {
+      kind: "item",
+      id: "maximize",
+      label: maximized ? "Restore" : "Maximize",
+    },
+  ];
+  if (!maximized) {
+    items.push({ kind: "item", id: "swap-main", label: "Swap to Main Pane" });
+  }
+  return items;
+}
 
 type Props = {
   session: Session;
@@ -103,6 +118,10 @@ type Props = {
   focused: boolean;
   addToChatTarget?: boolean;
   inSplit: boolean;
+  /** Expanded to fill the whole tab, hiding its split siblings. */
+  maximized?: boolean;
+  onMaximize?: (sessionId: string) => void;
+  onSwapToMainPane?: (sessionId: string) => void;
   composerFocused: boolean;
   composerFocusToken?: number;
   recents: RecentProject[];
@@ -222,6 +241,9 @@ export const SessionPane = memo(function SessionPane({
   focused,
   addToChatTarget = focused,
   inSplit,
+  maximized = false,
+  onMaximize,
+  onSwapToMainPane,
   composerFocused,
   composerFocusToken,
   recents,
@@ -375,6 +397,9 @@ export const SessionPane = memo(function SessionPane({
       void orchestrator.hydrate(session.id).catch(console.error);
   }, [session.id, session.inboxAsk, session.worktreeRemoved]);
   const [quoteRequest, setQuoteRequest] = useState<QuoteRequest>();
+  const [paneMenu, setPaneMenu] = useState<{ x: number; y: number } | null>(
+    null,
+  );
   const btwRequestId = useRef(0);
   const [btwOpenRequest, setBtwOpenRequest] = useState<BtwOpenRequest | null>(
     null,
@@ -685,6 +710,11 @@ export const SessionPane = memo(function SessionPane({
             }
             onPaneDragStart(event);
           }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setPaneMenu({ x: event.clientX, y: event.clientY });
+          }}
         >
           {onPaneDragStart ? (
             <GripVertical
@@ -717,6 +747,20 @@ export const SessionPane = memo(function SessionPane({
             <X className="size-3" strokeWidth={1.75} />
           </button>
         </div>
+      ) : null}
+      {paneMenu ? (
+        <ExplorerMenu
+          x={paneMenu.x}
+          y={paneMenu.y}
+          ariaLabel="Pane actions"
+          items={paneContextMenuItems(maximized)}
+          onPick={(id) => {
+            setPaneMenu(null);
+            if (id === "maximize") onMaximize?.(session.id);
+            else if (id === "swap-main") onSwapToMainPane?.(session.id);
+          }}
+          onClose={() => setPaneMenu(null)}
+        />
       ) : null}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div

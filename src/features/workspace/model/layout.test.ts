@@ -38,6 +38,8 @@ import {
   placePane,
   splitPane,
   splitSizesAtBoundary,
+  swapLeaves,
+  swapWithLargestLeaf,
   updateTerminalTab,
   type WorkspaceTab,
 } from "./layout";
@@ -667,6 +669,54 @@ describe("movePane", () => {
     expect(leaves[0]?.rect).toEqual({ x: 0, y: 0, w: 1, h: 0.25 });
     expect(leaves[1]?.rect).toEqual({ x: 0, y: 0.25, w: 1, h: 0.25 });
     expect(leaves[2]?.rect).toEqual({ x: 0, y: 0.5, w: 1, h: 0.5 });
+  });
+});
+
+describe("swapLeaves", () => {
+  it("exchanges two leaves' positions, keeping sizes in place", () => {
+    const tree = splitPane(leaf("a"), "a", "right", "b");
+    const next = swapLeaves(tree, "a", "b");
+    const leaves = layoutLeaves(next);
+    expect(leaves.map((pane) => pane.id)).toEqual(["b", "a"]);
+    expect(leaves[0]?.rect).toEqual({ x: 0, y: 0, w: 0.5, h: 1 });
+    expect(leaves[1]?.rect).toEqual({ x: 0.5, y: 0, w: 0.5, h: 1 });
+  });
+
+  it("is a no-op when swapping a leaf with itself", () => {
+    const tree = splitPane(leaf("a"), "a", "right", "b");
+    expect(swapLeaves(tree, "a", "a")).toBe(tree);
+  });
+});
+
+describe("swapWithLargestLeaf", () => {
+  it("swaps a smaller pane into the largest slot", () => {
+    const uneven = {
+      type: "split" as const,
+      id: "split",
+      dir: "right" as const,
+      children: [leaf("small"), leaf("big")],
+      sizes: [0.3, 0.7],
+    };
+    const next = swapWithLargestLeaf(uneven, "small");
+    const leaves = layoutLeaves(next);
+    expect(leaves.map((pane) => pane.id)).toEqual(["big", "small"]);
+    expect(leaves[1]?.rect).toEqual({ x: 0.3, y: 0, w: 0.7, h: 1 });
+  });
+
+  it("is a no-op when the pane is already the largest", () => {
+    const uneven = {
+      type: "split" as const,
+      id: "split",
+      dir: "right" as const,
+      children: [leaf("small"), leaf("big")],
+      sizes: [0.3, 0.7],
+    };
+    expect(swapWithLargestLeaf(uneven, "big")).toBe(uneven);
+  });
+
+  it("is a no-op on a single-leaf tree", () => {
+    const tree = leaf("only");
+    expect(swapWithLargestLeaf(tree, "only")).toBe(tree);
   });
 });
 

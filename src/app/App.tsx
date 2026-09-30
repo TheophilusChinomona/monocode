@@ -170,6 +170,7 @@ import {
   siblingLeafId,
   splitPane,
   surfacePanes,
+  swapWithLargestLeaf,
   updateTerminalTab,
   withSurfacePanes,
   type EditorPane,
@@ -3465,6 +3466,34 @@ export default function App({
     },
     [],
   );
+
+  const onMaximizePane = useCallback((paneId: string) => {
+    setTabs((prev) =>
+      prev.map((tab) =>
+        leafIds(tab.layout).includes(paneId)
+          ? {
+              ...tab,
+              maximizedId: tab.maximizedId === paneId ? undefined : paneId,
+              focusedId: paneId,
+            }
+          : tab,
+      ),
+    );
+  }, []);
+
+  const onSwapToMainPane = useCallback((paneId: string) => {
+    setTabs((prev) =>
+      prev.map((tab) =>
+        leafIds(tab.layout).includes(paneId)
+          ? {
+              ...tab,
+              layout: swapWithLargestLeaf(tab.layout, paneId),
+              focusedId: paneId,
+            }
+          : tab,
+      ),
+    );
+  }, []);
 
   const onDetachPane = useCallback(
     (paneId: string, targetTabId: string, position: "before" | "after") => {
@@ -10345,6 +10374,7 @@ export default function App({
                                     ? tab.focusedId
                                     : ""
                                 }
+                                maximizedId={tab.maximizedId}
                                 addToChatSessionId={
                                   tab.id === activeTabId
                                     ? active?.id
@@ -10368,6 +10398,8 @@ export default function App({
                                 editorNavigation={editorNavigation}
                                 onUpdatePlan={onUpdatePlan}
                                 onMovePane={onMovePane}
+                                onMaximizePane={onMaximizePane}
+                                onSwapToMainPane={onSwapToMainPane}
                                 onDetachPane={onDetachPane}
                                 onTerminalMetaChange={onTerminalMetaChange}
                               />
