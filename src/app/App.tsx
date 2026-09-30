@@ -2747,7 +2747,7 @@ export default function App({
             prev.map((entry) => {
               if (entry.id !== tab.id) return entry;
               return withSurfacePanes(
-                { ...entry, focusedId: pane.id },
+                setTabFocus(entry, pane.id),
                 "terminal",
                 (entry.terminalPanes ?? []).map((item) =>
                   item.id === pane.id
@@ -3643,11 +3643,10 @@ export default function App({
       setTabs((prev) =>
         prev.map((tab) => {
           return leafIds(tab.layout).includes(fromId)
-            ? {
-                ...tab,
-                layout: movePane(tab.layout, fromId, toId, edge),
-                focusedId: fromId,
-              }
+            ? setTabFocus(
+                { ...tab, layout: movePane(tab.layout, fromId, toId, edge) },
+                fromId,
+              )
             : tab;
         }),
       );
@@ -3748,11 +3747,13 @@ export default function App({
     setTabs((prev) =>
       prev.map((entry) =>
         entry.id === tab.id
-          ? {
-              ...entry,
-              layout: replaceLeafId(entry.layout, paneId, session.id),
-              focusedId: session.id,
-            }
+          ? setTabFocus(
+              {
+                ...entry,
+                layout: replaceLeafId(entry.layout, paneId, session.id),
+              },
+              session.id,
+            )
           : entry,
       ),
     );
@@ -7215,21 +7216,21 @@ export default function App({
           );
           if (!anchor || !sameProjectPath(anchor.cwd, cwd) || !tab)
             throw new Error("The target session must be open in this project");
-          const nextTabs = tabsRef.current.map((entry) =>
-            entry.id === tab.id
-              ? {
-                  ...entry,
-                  layout: splitPane(
-                    entry.layout,
-                    target.besideSessionId,
-                    target.direction,
-                    sessionId,
-                  ),
-                  focusedId: launch.reveal ? sessionId : entry.focusedId,
-                  diffFocused: launch.reveal ? false : entry.diffFocused,
-                }
-              : entry,
-          );
+          const nextTabs = tabsRef.current.map((entry) => {
+            if (entry.id !== tab.id) return entry;
+            const split = {
+              ...entry,
+              layout: splitPane(
+                entry.layout,
+                target.besideSessionId,
+                target.direction,
+                sessionId,
+              ),
+            };
+            return launch.reveal
+              ? { ...setTabFocus(split, sessionId), diffFocused: false }
+              : split;
+          });
           tabsRef.current = nextTabs;
           setTabs(nextTabs);
           return tab.id;
