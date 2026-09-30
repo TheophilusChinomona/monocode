@@ -165,6 +165,7 @@ import {
   openCommitTab,
   newAgentTab,
   openEditorTab,
+  openPaneBeside,
   openSessionChangesTab,
   pinEditorFile,
   openWorkspaceFile,
@@ -7702,12 +7703,7 @@ export default function App({
       if (tab) {
         const nextTabs = tabsRef.current.map((entry) =>
           entry.id === tab.id
-            ? {
-                ...entry,
-                layout: splitPane(entry.layout, sourceId, "right", session.id),
-                focusedId: session.id,
-                diffFocused: false,
-              }
+            ? openPaneBeside(entry, sourceId, session.id)
             : entry,
         );
         tabsRef.current = nextTabs;

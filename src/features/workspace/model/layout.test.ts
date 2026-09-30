@@ -30,6 +30,7 @@ import {
   openChangesTab,
   openCommitTab,
   openEditorTab,
+  openPaneBeside,
   openSessionChangesTab,
   pinEditorFile,
   openWorkspaceFile,
@@ -503,6 +504,27 @@ describe("setTabFocus", () => {
     expect(layoutLeaves(next.layout).map((pane) => pane.id)).toEqual([
       "a",
       "b",
+    ]);
+  });
+});
+
+describe("openPaneBeside", () => {
+  // Second opinion and handoff both open their new session through this.
+  it("reveals the new pane when the source pane is maximized", () => {
+    const tab = {
+      ...newTab("a"),
+      layout: splitPane(leaf("a"), "a", "right", "x"),
+      maximizedId: "a",
+      diffFocused: true,
+    };
+    const next = openPaneBeside(tab, "a", "b");
+    expect(next.focusedId).toBe("b");
+    expect(next.maximizedId).toBeUndefined();
+    expect(next.diffFocused).toBe(false);
+    expect(layoutLeaves(next.layout).map((pane) => pane.id)).toEqual([
+      "a",
+      "b",
+      "x",
     ]);
   });
 });

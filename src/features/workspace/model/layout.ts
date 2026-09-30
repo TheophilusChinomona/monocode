@@ -977,6 +977,24 @@ export function setTabFocus(tab: WorkspaceTab, focusedId: string): WorkspaceTab 
 }
 
 /**
+ * Split `paneId` to the right with a new leaf and focus it, clearing any
+ * maximize so the new pane is visible (second opinion, handoff).
+ */
+export function openPaneBeside(
+  tab: WorkspaceTab,
+  paneId: string,
+  newId: string,
+): WorkspaceTab {
+  return {
+    ...setTabFocus(
+      { ...tab, layout: splitPane(tab.layout, paneId, "right", newId) },
+      newId,
+    ),
+    diffFocused: false,
+  };
+}
+
+/**
  * Close one pane in a tab. Remaining chats, files, and terminals stay;
  * returns null only when this was the last leaf.
  */
